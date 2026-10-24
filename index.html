@@ -13,9 +13,22 @@
 </header>
 
 <main>
+  <section class="card" id="cvCard">
+    <h2>1. Lebenslauf hochladen</h2>
+    <p class="muted">PDF, Word (.docx) oder Text. Die Datei wird nur in deinem Browser gelesen, nicht auf einen Server hochgeladen.</p>
+    <div class="row"><input type="file" id="cvFile" accept=".pdf,.docx,.txt"></div>
+    <label class="full" style="margin-top:10px">Oder Lebenslauf-Text hier einfügen
+      <textarea id="cvInput" rows="5" placeholder="Lebenslauf als Text einfügen ..."></textarea></label>
+    <div class="row" style="margin-top:10px">
+      <button id="analyzeBtn" class="primary" type="button">Analysieren und beste Stellen suchen</button>
+      <span id="cvStatus" class="muted"></span>
+    </div>
+    <div id="cvResult" style="margin-top:8px"></div>
+  </section>
+
   <section class="card" id="profileCard">
-    <details open>
-      <summary>1. Dein Profil (wird nur in deinem Browser gespeichert)</summary>
+    <details>
+      <summary>2. Dein Profil (automatisch aus dem Lebenslauf, du kannst es korrigieren)</summary>
       <form id="profileForm" class="grid">
         <label>Vor- und Nachname<input name="name" autocomplete="name"></label>
         <label>Straße und Hausnummer<input name="street"></label>
@@ -39,9 +52,9 @@
   </section>
 
   <section class="card">
-    <h2>2. Suche</h2>
+    <h2>3. Suche</h2>
     <form id="searchForm" class="grid">
-      <label>Beruf / Stichwort<input name="was" value="Fachinformatiker"></label>
+      <label>Berufe / Stichworte (mit Komma trennen)<input name="was" value="Fachinformatiker, IT-Support"></label>
       <label>Ort<input name="wo" value="Düsseldorf"></label>
       <label>Umkreis (km)
         <select name="umkreis"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label>
@@ -60,7 +73,7 @@
   </section>
 
   <section>
-    <h2>3. Beste Stellen für dich</h2>
+    <h2>4. Beste Stellen für dich</h2>
     <div id="jobs" class="jobs"></div>
   </section>
 </main>
@@ -94,6 +107,8 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
