@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bewerbungs-Finder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Bewerbungs-Finder</h1>
+  <p id="todayLabel"></p>
+</header>
+
+<main>
+  <section class="card" id="profileCard">
+    <details open>
+      <summary>1. Dein Profil (wird nur in deinem Browser gespeichert)</summary>
+      <form id="profileForm" class="grid">
+        <label>Vor- und Nachname<input name="name" autocomplete="name"></label>
+        <label>Straße und Hausnummer<input name="street"></label>
+        <label>PLZ und Ort<input name="city" placeholder="z. B. 40210 Düsseldorf"></label>
+        <label>Telefon<input name="phone"></label>
+        <label>E-Mail<input name="email" type="email"></label>
+        <label>Geburtsdatum (optional)<input name="birth" placeholder="TT.MM.JJJJ"></label>
+        <label>Nationalität (optional)<input name="nationality"></label>
+        <label class="full">Motivation / Kurzprofil (2–3 Sätze, erscheint im Anschreiben)
+          <textarea name="motivation" rows="3" placeholder="Ich bin gelernter Fachinformatiker und möchte nach einer Zeit in einem anderen Beruf wieder in der IT arbeiten ..."></textarea></label>
+        <label class="full">Berufserfahrung (eine Zeile pro Station: Zeitraum | Position | Firma, Ort | Aufgaben)
+          <textarea name="experience" rows="4" placeholder="08/2025 – heute | Bäcker | Bäckerei XY, Mainz | Produktion, Qualitätskontrolle, Teamarbeit"></textarea></label>
+        <label class="full">Ausbildung (eine Zeile pro Station: Zeitraum | Abschluss | Einrichtung, Ort)
+          <textarea name="education" rows="3" placeholder="2019 – 2021 | Fachinformatiker | Schule XY, Marokko"></textarea></label>
+        <label class="full">Kenntnisse / Skills (mit Komma getrennt, werden auch für das Ranking genutzt)
+          <textarea name="skills" rows="2" placeholder="Windows, Linux, Netzwerke, Hardware, Support, HTML, CSS, JavaScript"></textarea></label>
+        <label class="full">Sprachen (eine Zeile pro Sprache: Sprache | Niveau)
+          <textarea name="languages" rows="3" placeholder="Arabisch | Muttersprache&#10;Deutsch | B1&#10;Englisch | B2"></textarea></label>
+      </form>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2. Suche</h2>
+    <form id="searchForm" class="grid">
+      <label>Beruf / Stichwort<input name="was" value="Fachinformatiker"></label>
+      <label>Ort<input name="wo" value="Düsseldorf"></label>
+      <label>Umkreis (km)
+        <select name="umkreis"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label>
+      <label>Art
+        <select name="angebotsart">
+          <option value="1" selected>Arbeit (Stelle)</option>
+          <option value="4">Ausbildung / Duales Studium</option>
+        </select></label>
+      <label>Veröffentlicht in den letzten
+        <select name="tage"><option value="1">1 Tag</option><option value="3">3 Tagen</option><option value="7" selected>7 Tagen</option><option value="30">30 Tagen</option></select></label>
+      <div class="full row">
+        <button type="submit" class="primary">Heute neu suchen</button>
+        <span id="status" class="muted"></span>
+      </div>
+    </form>
+  </section>
+
+  <section>
+    <h2>3. Beste Stellen für dich</h2>
+    <div id="jobs" class="jobs"></div>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <button id="closeModal" class="close" aria-label="Schließen">×</button>
+    <h2 id="mTitle"></h2>
+    <p id="mSub" class="muted"></p>
+    <nav class="tabs">
+      <button data-tab="company" class="active">Firma</button>
+      <button data-tab="letter">Anschreiben</button>
+      <button data-tab="cv">Lebenslauf</button>
+    </nav>
+    <div id="tab-company" class="tab"></div>
+    <div id="tab-letter" class="tab hidden">
+      <textarea id="letterText" rows="24"></textarea>
+      <div class="row">
+        <button id="copyLetter">Kopieren</button>
+        <button id="printLetter" class="primary">Als PDF drucken</button>
+      </div>
+    </div>
+    <div id="tab-cv" class="tab hidden">
+      <div id="cvPreview" class="paper"></div>
+      <div class="row"><button id="printCv" class="primary">Als PDF drucken</button></div>
+    </div>
+    <div class="row footer-actions">
+      <a id="applyLink" class="btn primary" target="_blank" rel="noopener">Zur Original-Anzeige und bewerben</a>
+      <button id="markApplied">Als beworben markieren</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
