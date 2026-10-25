@@ -42,7 +42,7 @@ function getSearch() {
 function score(job, p, search) {
   const hay = ((job.titel || '') + ' ' + (job.beruf || '')).toLowerCase();
   let pts = 0, hits = [];
-  const terms = [...skillList(p), ...(search.was || '').split(/\s+/)].map(s => s.toLowerCase()).filter(s => s.length > 2);
+  const terms = [...skillList(p), ...LS.get('cvTitles', []), ...(search.was || '').split(/[\s,]+/)].map(s => s.toLowerCase()).filter(s => s.length > 2);
   for (const t of new Set(terms)) if (hay.includes(t)) { pts += 20; hits.push(t); }
   const pub = job.aktuelleVeroeffentlichungsdatum ? new Date(job.aktuelleVeroeffentlichungsdatum) : null;
   if (pub) {
@@ -58,17 +58,22 @@ async function runSearch(auto = false) {
   LS.set('search', s);
   const status = $('#status');
   status.textContent = 'Suche läuft ...';
-  const q = new URLSearchParams({
-    was: s.was, wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
-    veroeffentlichtseit: s.tage, size: '50', page: '1'
-  });
+  const queries = (s.was || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 5);
   try {
-    const r = await fetch('/api/jobs?' + q);
-    if (!r.ok) throw new Error('Server antwortete mit ' + r.status);
-    const data = await r.json();
+    const results = await Promise.all(queries.map(async w => {
+      const q = new URLSearchParams({
+        was: w, wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
+        veroeffentlichtseit: s.tage, size: '50', page: '1'
+      });
+      const r = await fetch('/api/jobs?' + q);
+      if (!r.ok) throw new Error('Server antwortete mit ' + r.status);
+      return (await r.json()).stellenangebote || [];
+    }));
     const p = getProfile();
-    jobs = (data.stellenangebote || []).map(j => ({ ...j, _s: score(j, p, s) }))
-      .sort((a, b) => b._s.pts - a._s.pts);
+    const seen = new Map();
+    results.flat().forEach(j => { if (j.refnr && !seen.has(j.refnr)) seen.set(j.refnr, j); });
+    jobs = [...seen.values()].map(j => ({ ...j, _s: score(j, p, s) }))
+      .sort((a, b) => b._s.pts - a._s.pts).slice(0, 40);
     LS.set('lastRun', todayISO());
     status.textContent = `${jobs.length} Stellen gefunden (${auto ? 'automatisch heute' : 'jetzt'} aktualisiert).`;
     renderJobs();
@@ -278,9 +283,138 @@ $('#profileForm').addEventListener('input', () => { if (current && !$('#modal').
 
 searchForm.addEventListener('submit', e => { e.preventDefault(); runSearch(false); });
 
+/* ---------- Lebenslauf hochladen und analysieren ---------- */
+const SKILL_DICT = ['Windows', 'Windows Server', 'Linux', 'Ubuntu', 'Debian', 'macOS', 'Active Directory', 'Netzwerk', 'Netzwerke','TCP/IP', 'DNS', 'DHCP', 'VPN', 'Firewall', 'Cisco', 'VMware', 'Hyper-V', 'Docker', 'Kubernetes', 'Git', 'GitHub', 'Python', 'JavaScript', 'TypeScript', 'Java', 'C#', 'C++', 'PHP', 'SQL', 'MySQL', 'PostgreSQL', 'HTML', 'CSS', 'React', 'Node.js', 'Bash', 'PowerShell', 'Microsoft 365', 'Office 365', 'Excel', 'Hardware', 'Support', 'Helpdesk', 'Server', 'Cloud', 'AWS', 'Azure', 'IT-Sicherheit', 'Datenbank', 'WordPress', 'Android', 'Scrum', 'Jira', 'ITIL'];
+const TITLE_RULES = [
+  ['Fachinformatiker', /fachinformatiker/i],
+  ['Systemadministrator', /system\s?administrat|sysadmin|active directory|windows server|linux/i],
+  ['IT-Support', /support|helpdesk|help desk|hardware|troubleshoot|1st level|2nd level/i],
+  ['Netzwerktechniker', /netzwerk|network|cisco|tcp\/ip/i],
+  ['Softwareentwickler', /python|\bjava\b|javascript|typescript|c#|c\+\+|\bphp\b|softwareentwickl/i],
+  ['Webentwickler', /\bhtml\b|\bcss\b|react|wordpress|frontend|webentwickl/i]
+];
+const HEADERS = {
+  experience: ['Berufserfahrung', 'Berufliche Erfahrung', 'Beruflicher Werdegang', 'Werdegang', 'Work Experience', 'Experience', 'Praktische Erfahrung'],
+  education: ['Ausbildung', 'Bildung', 'Schulbildung', 'Bildungsweg', 'Education', 'Qualifikationen'],
+  skills: ['Kenntnisse', 'IT-Kenntnisse', 'EDV-Kenntnisse', 'Fähigkeiten', 'Skills', 'Kompetenzen'],
+  languages: ['Sprachen', 'Sprachkenntnisse', 'Languages']
+};
+
+async function fileToText(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.txt') || name.endsWith('.md')) return file.text();
+  const buf = await file.arrayBuffer();
+  if (name.endsWith('.docx')) {
+    if (!window.mammoth) throw new Error('Die Word-Bibliothek konnte nicht geladen werden (Internet prüfen).');
+    return (await mammoth.extractRawText({ arrayBuffer: buf })).value;
+  }
+  if (name.endsWith('.pdf')) {
+    if (!window.pdfjsLib) throw new Error('Die PDF-Bibliothek konnte nicht geladen werden (Internet prüfen).');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let out = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const content = await (await pdf.getPage(i)).getTextContent();
+      let lastY = null;
+      for (const it of content.items) {
+        const y = it.transform[5];
+        if (lastY !== null) out += Math.abs(y - lastY) > 2 ? '\n' : ' ';
+        out += it.str; lastY = y;
+      }
+      out += '\n';
+    }
+    return out;
+  }
+  throw new Error('Dateityp nicht unterstützt. Bitte PDF, DOCX oder TXT.');
+}
+
+function splitSections(text) {
+  const groups = { experience: [], education: [], skills: [], languages: [] };
+  let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l) continue;
+    let hit = null;
+    if (l.length < 40) for (const [g, names] of Object.entries(HEADERS)) {
+      if (names.some(n => new RegExp('^' + n.replace(/[-]/g, '\\-') + '\\s*:?$', 'i').test(l))) hit = g;
+    }
+    if (hit) { cur = hit; continue; }
+    if (/^(Persönliche Daten|Kontakt|Interessen|Hobbys|Referenzen|Weiterbildung)\s*:?$/i.test(l)) { cur = null; continue; }
+    if (cur) groups[cur].push(l);
+  }
+  return groups;
+}
+
+const dateRow = l => {
+  const m = l.match(/^((?:\d{1,2}[.\/])?\d{4}\s*(?:–|-|—|bis)\s*(?:(?:\d{1,2}[.\/])?\d{4}|heute|aktuell|jetzt|present))\s*[:\-–|]?\s*(.*)$/i);
+  return m ? `${m[1]} | ${m[2]}` : l;
+};
+
+function analyzeText(text) {
+  const out = {};
+  out.email = (text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/) || [])[0];
+  const ph = text.match(/(?:tel|telefon|mobil|handy|phone)[^\d+]{0,10}((?:\+|0)[\d\s\/\-()]{7,}\d)/i) || text.match(/(\+\d[\d\s\-()]{8,}\d)/);
+  if (ph) out.phone = ph[1].trim();
+  const head = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 10);
+  out.name = head.find(l => /^[A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß\-]+){1,3}$/.test(l) && !/lebenslauf/i.test(l));
+  const st = text.match(/([A-ZÄÖÜ][A-Za-zäöüß.\-]*(?:straße|strasse|str\.|weg|platz|allee|gasse|ring)[ \t]*\d+[ \t]?[a-z]?)/);
+  if (st) out.street = st[1];
+  const pc = text.match(/\b(\d{5})[ \t]+([A-ZÄÖÜ][A-Za-zäöüß\-]+(?:[ \t][A-Za-zäöüß\-]+)?)/);
+  if (pc) { out.city = pc[1] + ' ' + pc[2]; out.cityName = pc[2]; }
+  const bd = text.match(/(?:geboren|geburtsdatum|geb\.)[^\d]{0,20}(\d{1,2}\.\d{1,2}\.\d{4})/i);
+  if (bd) out.birth = bd[1];
+  const g = splitSections(text);
+  if (g.experience.length) out.experience = g.experience.map(dateRow).join('\n');
+  if (g.education.length) out.education = g.education.map(dateRow).join('\n');
+  if (g.languages.length) out.languages = g.languages.map(l => l.replace(/\s*[–\-:,]\s*/, ' | ')).join('\n');
+  const low = text.toLowerCase();
+  const found = SKILL_DICT.filter(s => new RegExp('(^|[^a-z0-9äöü])' + s.toLowerCase().replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&') + '($|[^a-z0-9äöü])').test(low));
+  out.skills = (found.length ? found : g.skills.join(', ').split(/[,;]/).map(s => s.trim()).filter(Boolean)).join(', ');
+  out.titles = TITLE_RULES.filter(([, re]) => re.test(text)).map(([t]) => t).slice(0, 4);
+  if (!out.titles.length) out.titles = ['IT Support'];
+  return out;
+}
+
+async function analyzeCv(text) {
+  const status = $('#cvStatus');
+  if (!text || text.trim().length < 40) { status.textContent = 'Kein Text erkannt. Bei gescannten PDFs bitte den Text unten einfügen.'; return; }
+  const a = analyzeText(text);
+  const p = getProfile();
+  for (const k of ['name', 'street', 'city', 'phone', 'email', 'birth', 'experience', 'education', 'skills', 'languages']) if (a[k]) p[k] = a[k];
+  for (const el of profileForm.elements) if (el.name && p[el.name] != null) el.value = p[el.name];
+  LS.set('profile', getProfile());
+  LS.set('cvText', text.slice(0, 20000));
+  LS.set('cvTitles', a.titles);
+  searchForm.elements.was.value = a.titles.join(', ');
+  if (!searchForm.elements.wo.value.trim() && a.cityName) searchForm.elements.wo.value = a.cityName;
+  const skills = skillList(getProfile());
+  $('#cvResult').innerHTML = `<p><b>Erkannt:</b> ${esc(a.name || 'Name nicht erkannt')}${a.email ? ' · ' + esc(a.email) : ''}</p>
+    <p>Berufe für die Suche: ${a.titles.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</p>
+    <p>Skills: ${skills.map(t => `<span class="tag">${esc(t)}</span>`).join('') || '<span class="muted">keine erkannt</span>'}</p>
+    <p class="muted">Prüfe das Profil unter "2. Dein Profil" und korrigiere, was nicht stimmt. Dann suchst du einfach neu.</p>`;
+  status.textContent = 'Lebenslauf analysiert. Suche läuft ...';
+  await runSearch(false);
+  status.textContent = 'Fertig. Die besten Stellen stehen unten.';
+  $('#jobs').scrollIntoView({ behavior: 'smooth' });
+}
+
+$('#cvFile').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('#cvStatus').textContent = 'Lese Datei ...';
+  try {
+    const text = await fileToText(f);
+    $('#cvInput').value = text;
+    await analyzeCv(text);
+  } catch (err) { $('#cvStatus').textContent = 'Fehler: ' + err.message; }
+});
+$('#analyzeBtn').addEventListener('click', () => analyzeCv($('#cvInput').value));
+
 /* ---------- Start ---------- */
 $('#todayLabel').textContent = 'Heute: ' + new Date().toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 loadProfile();
 loadSearch();
 // Jeden Tag beim ersten Öffnen automatisch neu suchen
-if (LS.get('lastRun', '') !== todayISO()) runSearch(true);
+const savedCv = LS.get('cvText', '');
+if (savedCv) $('#cvInput').value = savedCv;
+if (LS.get('search', null) && LS.get('lastRun', '') !== todayISO()) runSearch(true);
