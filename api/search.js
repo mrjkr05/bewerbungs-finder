@@ -59,12 +59,15 @@ async function adzuna(queries, p) {
 }
 
 async function arbeitnow(queries, skills, p) {
+  const errs = [];
   const pages = await Promise.all([1, 2, 3, 4, 5].map(n =>
-    getJson('https://www.arbeitnow.com/api/job-board-api?page=' + n).then(d => d.data || []).catch(() => [])));
+    getJson('https://www.arbeitnow.com/api/job-board-api?page=' + n).then(d => d.data || []).catch(e => { errs.push(e.message); return []; })));
+  if (!pages.flat().length) throw new Error('no data received (' + (errs[0] || 'empty answer') + ')');
   const terms = [...queries, ...skills].map(t => t.toLowerCase()).filter(t => t.length > 2);
   const city = String(p.wo || '').toLowerCase();
   const days = Number(p.tage) || 7;
-  return pages.flat().filter(j => {
+  const fetched = pages.flat().length;
+  const out = pages.flat().filter(j => {
     const hay = (j.title + ' ' + (j.tags || []).join(' ') + ' ' + strip(j.description)).toLowerCase();
     const place = String(j.location || '').toLowerCase();
     const okPlace = !city || place.includes(city) || j.remote;
@@ -84,13 +87,16 @@ async function arbeitnow(queries, skills, p) {
     _desc: strip(j.description),
     _src: 'Arbeitnow'
   }));
+  out.fetched = fetched;
+  return out;
 }
 
 async function remotive(queries, p) {
   if (p.angebotsart === '4') return [];
   const lists = await Promise.all(queries.map(w =>
     getJson('https://remotive.com/api/remote-jobs?limit=25&search=' + encodeURIComponent(w)).then(d => d.jobs || [])));
-  return lists.flat()
+  const fetched = lists.flat().length;
+  const out = lists.flat()
     .filter(j => /germany|deutschland|europe|eu\b|emea|worldwide|anywhere/i.test(j.candidate_required_location || ''))
     .map(j => ({
       refnr: 'rm:' + j.id,
@@ -103,6 +109,8 @@ async function remotive(queries, p) {
       _desc: strip(j.description).slice(0, 6000),
       _src: 'Remotive'
     }));
+  out.fetched = fetched;
+  return out;
 }
 
 module.exports = async (req, res) => {
@@ -121,9 +129,9 @@ module.exports = async (req, res) => {
   const settled = await Promise.allSettled(names.map(n => tasks[n]));
   const sources = [], jobs = [];
   settled.forEach((s, i) => {
-    if (s.status === 'fulfilled') { sources.push({ name: names[i], count: s.value.length }); jobs.push(...s.value); }
+    if (s.status === 'fulfilled') { sources.push({ name: names[i], count: s.value.length, fetched: s.value.fetched }); jobs.push(...s.value); }
     else sources.push({ name: names[i], count: 0, error: String(s.reason && s.reason.message || s.reason) });
   });
   res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=3600');
-  res.status(200).json({ jobs, sources });
+  res.status(200).json({ jobs, sources, query: { queries, wo: p.wo || '', tage: p.tage || '7', angebotsart: p.angebotsart || '1' } });
 };
