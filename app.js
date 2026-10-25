@@ -53,6 +53,58 @@ function score(job, p, search) {
   return { pts: Math.min(100, Math.round(pts)), hits };
 }
 
+const BA = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4';
+
+// Bundesagentur: erst über den eigenen Vercel-Proxy, dann direkt aus dem Browser.
+// Gibt null zurück, wenn beides nicht klappt.
+async function searchBA(w, s) {
+  const q = new URLSearchParams({
+    was: w, wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
+    veroeffentlichtseit: s.tage, size: '50', page: '1'
+  });
+  try {
+    const r = await fetch('/api/jobs?' + q);
+    if (r.ok) return (await r.json()).stellenangebote || [];
+  } catch {}
+  try {
+    const r = await fetch(BA + '/jobs?' + q, { headers: { 'X-API-Key': 'jobboerse-jobsuche' } });
+    if (r.ok) return (await r.json()).stellenangebote || [];
+  } catch {}
+  return null;
+}
+
+// Ersatzquelle Arbeitnow (offene API, Stellen in Deutschland). Filter passiert hier im Browser.
+async function searchArbeitnow(queries, s) {
+  const terms = [...queries, ...skillList(getProfile()).slice(0, 8)].map(t => t.toLowerCase());
+  const city = (s.wo || '').toLowerCase();
+  const days = Number(s.tage) || 7;
+  const pages = await Promise.all([1, 2, 3, 4, 5].map(async n => {
+    try {
+      const r = await fetch('https://www.arbeitnow.com/api/job-board-api?page=' + n);
+      return r.ok ? (await r.json()).data || [] : [];
+    } catch { return []; }
+  }));
+  const all = pages.flat();
+  if (!all.length) throw new Error('Weder die Bundesagentur noch Arbeitnow sind erreichbar. Bitte später erneut versuchen.');
+  return all.filter(j => {
+    const hay = (j.title + ' ' + (j.tags || []).join(' ') + ' ' + j.description.replace(/<[^>]+>/g, ' ')).toLowerCase();
+    const place = (j.location || '').toLowerCase();
+    const okPlace = !city || place.includes(city) || j.remote;
+    const okTerm = terms.some(t => t.length > 2 && hay.includes(t));
+    const okAge = (Date.now() / 1000 - j.created_at) < days * 86400 * 4;
+    return okPlace && okTerm && okAge;
+  }).map(j => ({
+    refnr: 'an:' + j.slug,
+    titel: j.title,
+    beruf: (j.tags || []).join(', '),
+    arbeitgeber: j.company_name,
+    arbeitsort: { ort: j.location || (j.remote ? 'Remote' : '') },
+    aktuelleVeroeffentlichungsdatum: new Date(j.created_at * 1000).toISOString().slice(0, 10),
+    _url: j.url,
+    _desc: j.description
+  }));
+}
+
 async function runSearch(auto = false) {
   const s = getSearch();
   LS.set('search', s);
@@ -60,26 +112,20 @@ async function runSearch(auto = false) {
   status.textContent = 'Suche läuft ...';
   const queries = (s.was || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 5);
   try {
-    const results = await Promise.all(queries.map(async w => {
-      const q = new URLSearchParams({
-        was: w, wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
-        veroeffentlichtseit: s.tage, size: '50', page: '1'
-      });
-      const r = await fetch('/api/jobs?' + q);
-      if (!r.ok) {
-        let info = '';
-        try { const e = await r.json(); info = [e.error, e.detail].filter(Boolean).join(' – '); } catch {}
-        throw new Error('Status ' + r.status + (info ? ': ' + info : ''));
-      }
-      return (await r.json()).stellenangebote || [];
-    }));
+    let results = await Promise.all(queries.map(w => searchBA(w, s)));
+    let source = 'Bundesagentur für Arbeit';
+    if (results.every(r => r === null)) {
+      // Bundesagentur nicht erreichbar (z. B. Vercel blockiert): Ersatzquelle Arbeitnow
+      results = [await searchArbeitnow(queries, s)];
+      source = 'Arbeitnow (Ersatzquelle, die Bundesagentur ist nicht erreichbar)';
+    }
     const p = getProfile();
     const seen = new Map();
-    results.flat().forEach(j => { if (j.refnr && !seen.has(j.refnr)) seen.set(j.refnr, j); });
+    results.flat().filter(Boolean).forEach(j => { if (j.refnr && !seen.has(j.refnr)) seen.set(j.refnr, j); });
     jobs = [...seen.values()].map(j => ({ ...j, _s: score(j, p, s) }))
       .sort((a, b) => b._s.pts - a._s.pts).slice(0, 40);
     LS.set('lastRun', todayISO());
-    status.textContent = `${jobs.length} Stellen gefunden (${auto ? 'automatisch heute' : 'jetzt'} aktualisiert).`;
+    status.textContent = `${jobs.length} Stellen gefunden. Quelle: ${source}.`;
     renderJobs();
   } catch (e) {
     status.textContent = 'Fehler: ' + e.message;
@@ -109,7 +155,7 @@ function renderJobs() {
     </article>`;
   }).join('');
 }
-const adUrl = (j, d) => (d && d.externeUrl) || 'https://www.arbeitsagentur.de/jobsuche/jobdetail/' + encodeURIComponent(j.refnr);
+const adUrl = (j, d) => j._url || (d && d.externeUrl) || 'https://www.arbeitsagentur.de/jobsuche/jobdetail/' + encodeURIComponent(j.refnr);
 
 $('#jobs').addEventListener('click', e => {
   const b = e.target.closest('[data-open]');
@@ -124,10 +170,20 @@ async function openJob(job) {
   $('#mSub').textContent = job.arbeitgeber || '';
   $('#tab-company').innerHTML = '<p class="muted">Lade Details ...</p>';
   showTab('company');
-  try {
-    const r = await fetch('/api/jobs?detail=' + encodeURIComponent(job.refnr));
-    if (r.ok) current.detail = await r.json();
-  } catch {}
+  if (job._desc) {
+    current.detail = { stellenangebotsBeschreibung: job._desc, firma: job.arbeitgeber, externeUrl: job._url };
+  } else {
+    try {
+      const r = await fetch('/api/jobs?detail=' + encodeURIComponent(job.refnr));
+      if (r.ok) current.detail = await r.json();
+    } catch {}
+    if (!current.detail) {
+      try {
+        const r = await fetch(BA + '/jobdetails/' + btoa(job.refnr), { headers: { 'X-API-Key': 'jobboerse-jobsuche' } });
+        if (r.ok) current.detail = await r.json();
+      } catch {}
+    }
+  }
   renderCompany();
   $('#letterText').value = buildLetter();
   $('#cvPreview').innerHTML = buildCv();
