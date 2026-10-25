@@ -59,7 +59,6 @@ async function adzuna(queries, p) {
 }
 
 async function arbeitnow(queries, skills, p) {
-  if (p.angebotsart === '4') return [];
   const pages = await Promise.all([1, 2, 3, 4, 5].map(n =>
     getJson('https://www.arbeitnow.com/api/job-board-api?page=' + n).then(d => d.data || []).catch(() => [])));
   const terms = [...queries, ...skills].map(t => t.toLowerCase()).filter(t => t.length > 2);
@@ -71,7 +70,9 @@ async function arbeitnow(queries, skills, p) {
     const okPlace = !city || place.includes(city) || j.remote;
     const okTerm = terms.some(t => hay.includes(t));
     const okAge = (Date.now() / 1000 - j.created_at) < days * 86400 * 4;
-    return okPlace && okTerm && okAge;
+    // For apprenticeship searches only keep ads that actually mention an apprenticeship
+    const okType = p.angebotsart !== '4' || /ausbildung|azubi|duales studium|trainee|werkstudent/i.test(hay);
+    return okPlace && okTerm && okAge && okType;
   }).map(j => ({
     refnr: 'an:' + j.slug,
     titel: j.title,
