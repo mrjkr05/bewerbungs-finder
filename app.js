@@ -40,7 +40,7 @@ function getSearch() {
 }
 
 function score(job, p, search) {
-  const hay = ((job.titel || '') + ' ' + (job.beruf || '')).toLowerCase();
+  const hay = ((job.titel || '') + ' ' + (job.beruf || '') + ' ' + (job._desc || '').slice(0, 800)).toLowerCase();
   let pts = 0, hits = [];
   const terms = [...skillList(p), ...LS.get('cvTitles', []), ...(search.was || '').split(/[\s,]+/)].map(s => s.toLowerCase()).filter(s => s.length > 2);
   for (const t of new Set(terms)) if (hay.includes(t)) { pts += 20; hits.push(t); }
@@ -55,56 +55,6 @@ function score(job, p, search) {
 
 const BA = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4';
 
-// Bundesagentur: erst über den eigenen Vercel-Proxy, dann direkt aus dem Browser.
-// Gibt null zurück, wenn beides nicht klappt.
-async function searchBA(w, s) {
-  const q = new URLSearchParams({
-    was: w, wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
-    veroeffentlichtseit: s.tage, size: '50', page: '1'
-  });
-  try {
-    const r = await fetch('/api/jobs?' + q);
-    if (r.ok) return (await r.json()).stellenangebote || [];
-  } catch {}
-  try {
-    const r = await fetch(BA + '/jobs?' + q, { headers: { 'X-API-Key': 'jobboerse-jobsuche' } });
-    if (r.ok) return (await r.json()).stellenangebote || [];
-  } catch {}
-  return null;
-}
-
-// Ersatzquelle Arbeitnow (offene API, Stellen in Deutschland). Filter passiert hier im Browser.
-async function searchArbeitnow(queries, s) {
-  const terms = [...queries, ...skillList(getProfile()).slice(0, 8)].map(t => t.toLowerCase());
-  const city = (s.wo || '').toLowerCase();
-  const days = Number(s.tage) || 7;
-  const pages = await Promise.all([1, 2, 3, 4, 5].map(async n => {
-    try {
-      const r = await fetch('https://www.arbeitnow.com/api/job-board-api?page=' + n);
-      return r.ok ? (await r.json()).data || [] : [];
-    } catch { return []; }
-  }));
-  const all = pages.flat();
-  if (!all.length) throw new Error('Weder die Bundesagentur noch Arbeitnow sind erreichbar. Bitte später erneut versuchen.');
-  return all.filter(j => {
-    const hay = (j.title + ' ' + (j.tags || []).join(' ') + ' ' + j.description.replace(/<[^>]+>/g, ' ')).toLowerCase();
-    const place = (j.location || '').toLowerCase();
-    const okPlace = !city || place.includes(city) || j.remote;
-    const okTerm = terms.some(t => t.length > 2 && hay.includes(t));
-    const okAge = (Date.now() / 1000 - j.created_at) < days * 86400 * 4;
-    return okPlace && okTerm && okAge;
-  }).map(j => ({
-    refnr: 'an:' + j.slug,
-    titel: j.title,
-    beruf: (j.tags || []).join(', '),
-    arbeitgeber: j.company_name,
-    arbeitsort: { ort: j.location || (j.remote ? 'Remote' : '') },
-    aktuelleVeroeffentlichungsdatum: new Date(j.created_at * 1000).toISOString().slice(0, 10),
-    _url: j.url,
-    _desc: j.description
-  }));
-}
-
 async function runSearch(auto = false) {
   const s = getSearch();
   LS.set('search', s);
@@ -112,20 +62,21 @@ async function runSearch(auto = false) {
   status.textContent = 'Suche läuft ...';
   const queries = (s.was || '').split(',').map(x => x.trim()).filter(Boolean).slice(0, 5);
   try {
-    let results = await Promise.all(queries.map(w => searchBA(w, s)));
-    let source = 'Bundesagentur für Arbeit';
-    if (results.every(r => r === null)) {
-      // Bundesagentur nicht erreichbar (z. B. Vercel blockiert): Ersatzquelle Arbeitnow
-      results = [await searchArbeitnow(queries, s)];
-      source = 'Arbeitnow (Ersatzquelle, die Bundesagentur ist nicht erreichbar)';
-    }
+    const qs = new URLSearchParams({
+      was: queries.join(','), wo: s.wo, umkreis: s.umkreis, angebotsart: s.angebotsart,
+      tage: s.tage, skills: skillList(getProfile()).slice(0, 8).join(',')
+    });
+    const r = await fetch('/api/search?' + qs);
+    if (!r.ok) throw new Error('Search server answered with status ' + r.status + '. Is api/search.js uploaded?');
+    const data = await r.json();
     const p = getProfile();
     const seen = new Map();
-    results.flat().filter(Boolean).forEach(j => { if (j.refnr && !seen.has(j.refnr)) seen.set(j.refnr, j); });
+    (data.jobs || []).forEach(j => { if (j.refnr && !seen.has(j.refnr)) seen.set(j.refnr, j); });
     jobs = [...seen.values()].map(j => ({ ...j, _s: score(j, p, s) }))
-      .sort((a, b) => b._s.pts - a._s.pts).slice(0, 40);
+      .sort((a, b) => b._s.pts - a._s.pts).slice(0, 60);
     LS.set('lastRun', todayISO());
-    status.textContent = `${jobs.length} Stellen gefunden. Quelle: ${source}.`;
+    const report = (data.sources || []).map(x => x.error ? `${x.name}: not available` : `${x.name}: ${x.count}`).join(' | ');
+    status.textContent = `${jobs.length} jobs found. Sources: ${report}`;
     renderJobs();
   } catch (e) {
     status.textContent = 'Fehler: ' + e.message;
@@ -144,7 +95,7 @@ function renderJobs() {
       <div>
         <h3>${esc(j.titel || j.beruf)}${applied[j.refnr] ? '<span class="badge">beworben</span>' : ''}</h3>
         <div class="meta">${esc(j.arbeitgeber || 'Arbeitgeber nicht genannt')} · ${esc(ort)}${km}</div>
-        <div class="meta">Veröffentlicht: ${esc(j.aktuelleVeroeffentlichungsdatum || '–')}</div>
+        <div class="meta">Veröffentlicht: ${esc(j.aktuelleVeroeffentlichungsdatum || '–')} · Quelle: ${esc(j._src || 'Bundesagentur')}</div>
         <div>${j._s.hits.map(h => `<span class="tag">${esc(h)}</span>`).join('')}</div>
       </div>
       <span class="score ${cls}">${j._s.pts}% Match</span>
