@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/jobs.js": { "maxDuration": 15 }
+  },
+  "regions": ["fra1"]
+}
