@@ -75,8 +75,9 @@ async function runSearch(auto = false) {
     jobs = [...seen.values()].map(j => ({ ...j, _s: score(j, p, s) }))
       .sort((a, b) => b._s.pts - a._s.pts).slice(0, 60);
     LS.set('lastRun', todayISO());
-    const report = (data.sources || []).map(x => x.error ? `${x.name}: not available` : `${x.name}: ${x.count}`).join(' | ');
-    status.textContent = `${jobs.length} jobs found. Sources: ${report}`;
+    const report = (data.sources || []).map(x => x.error ? `${x.name}: not available (${x.error})` : x.fetched != null ? `${x.name}: ${x.count} of ${x.fetched} match` : `${x.name}: ${x.count}`).join(' | ');
+    const qy = data.query || {};
+    status.textContent = `${jobs.length} jobs found. Type: ${qy.angebotsart === '4' ? 'Ausbildung' : 'Job'}, place: ${qy.wo || 'any'}, last ${qy.tage} days. Sources: ${report}`;
     renderJobs();
   } catch (e) {
     status.textContent = 'Fehler: ' + e.message;
