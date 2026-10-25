@@ -66,7 +66,11 @@ async function runSearch(auto = false) {
         veroeffentlichtseit: s.tage, size: '50', page: '1'
       });
       const r = await fetch('/api/jobs?' + q);
-      if (!r.ok) throw new Error('Server antwortete mit ' + r.status);
+      if (!r.ok) {
+        let info = '';
+        try { const e = await r.json(); info = [e.error, e.detail].filter(Boolean).join(' – '); } catch {}
+        throw new Error('Status ' + r.status + (info ? ': ' + info : ''));
+      }
       return (await r.json()).stellenangebote || [];
     }));
     const p = getProfile();
@@ -78,7 +82,7 @@ async function runSearch(auto = false) {
     status.textContent = `${jobs.length} Stellen gefunden (${auto ? 'automatisch heute' : 'jetzt'} aktualisiert).`;
     renderJobs();
   } catch (e) {
-    status.textContent = 'Fehler: ' + e.message + ' (läuft die Seite auf Vercel mit dem Ordner /api?)';
+    status.textContent = 'Fehler: ' + e.message;
   }
 }
 
